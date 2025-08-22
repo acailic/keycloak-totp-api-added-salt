@@ -133,7 +133,7 @@ class TOTPResourceApi(
 
         val totpCredentialModel = OTPCredentialModel.createFromPolicy(realm, secret, request.deviceName)
         val salt = ByteArray(16)
-        secureRandom.nextBytes(salt)
+        SecureRandom().nextBytes(salt)
         totpCredentialModel.salt = salt
         if (!CredentialHelper.createOTPCredential(session, realm, user, request.initialCode, totpCredentialModel)) {
             return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
