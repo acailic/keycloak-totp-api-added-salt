@@ -18,6 +18,7 @@ dependencies {
     implementation("org.keycloak:keycloak-server-spi-private:26.0.0")
     implementation("jakarta.ws.rs:jakarta.ws.rs-api:3.1.0")
     implementation("org.jetbrains.kotlin:kotlin-stdlib:2.0.0")
+    implementation("org.jetbrains.kotlin:kotlin-reflect:2.0.0")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.14.2")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.14.2")
     testImplementation(platform("org.junit:junit-bom:5.9.1"))
@@ -36,7 +37,8 @@ kotlin {
 tasks {
     val shadowJar by existing(ShadowJar::class) {
         dependencies {
-            include(dependency("org.jetbrains.kotlin:kotlin-stdlib:2.0.0"))
+            include(dependency("org.jetbrains.kotlin:kotlin-stdlib"))
+            include(dependency("org.jetbrains.kotlin:kotlin-reflect"))
         }
         dependsOn(build)
         archiveFileName.set("keycloak-totp-api.jar")
