@@ -17,6 +17,7 @@ import org.keycloak.models.utils.HmacOTP
 import org.keycloak.services.managers.AppAuthManager
 import org.keycloak.utils.CredentialHelper
 import org.keycloak.utils.TotpUtils
+import java.security.SecureRandom
 
 class TOTPResourceApi(
     private val session: KeycloakSession,
@@ -131,6 +132,9 @@ class TOTPResourceApi(
         }
 
         val totpCredentialModel = OTPCredentialModel.createFromPolicy(realm, secret, request.deviceName)
+        val salt = ByteArray(16)
+        SecureRandom().nextBytes(salt)
+        totpCredentialModel.salt = salt
         if (!CredentialHelper.createOTPCredential(session, realm, user, request.initialCode, totpCredentialModel)) {
             return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
                 .entity(CommonApiResponse("Failed to create TOTP credential")).build()
