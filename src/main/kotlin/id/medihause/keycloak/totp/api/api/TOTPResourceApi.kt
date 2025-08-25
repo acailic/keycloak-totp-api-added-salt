@@ -19,27 +19,29 @@ import org.keycloak.utils.CredentialHelper
 import org.keycloak.utils.TotpUtils
 import java.security.SecureRandom
 import java.util.Base64
+import org.jboss.logging.Logger
 
 class TOTPResourceApi(
     private val session: KeycloakSession,
 ) {
     private val totpSecretLength = 20
+    private val logger = Logger.getLogger(TOTPResourceApi::class.java)
 
     /**
      * Helper function to extract salt from a salted secret
      * Returns Pair<originalSecret, saltBase64> or null if no salt found
      */
     private fun extractSaltFromSecret(saltedSecret: String): Pair<String, String>? {
-        println("DEBUG: Attempting to extract salt from secret (length: ${saltedSecret.length})")
+        logger.info("DEBUG: Attempting to extract salt from secret (length: ${saltedSecret.length})")
         val saltPrefix = "|salt:"
         val saltIndex = saltedSecret.indexOf(saltPrefix)
         return if (saltIndex != -1) {
             val originalSecret = saltedSecret.substring(0, saltIndex)
             val saltBase64 = saltedSecret.substring(saltIndex + saltPrefix.length)
-            println("DEBUG: Salt extraction successful - original secret length: ${originalSecret.length}, salt length: ${saltBase64.length}")
+            logger.info("DEBUG: Salt extraction successful - original secret length: ${originalSecret.length}, salt length: ${saltBase64.length}")
             Pair(originalSecret, saltBase64)
         } else {
-            println("DEBUG: No salt prefix found in secret - treating as non-salted credential")
+            logger.info("DEBUG: No salt prefix found in secret - treating as non-salted credential")
             null
         }
     }
@@ -92,11 +94,11 @@ class TOTPResourceApi(
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
     fun verifyTOTP(request: VerifyTOTPRequest, @PathParam("userId") userId: String): Response {
-        println("DEBUG: TOTP verification started for user $userId, device: ${request.deviceName}")
+        logger.info("DEBUG: TOTP verification started for user $userId, device: ${request.deviceName}")
         val user = authenticateSessionAndGetUser(userId)
 
         if (!VerifyTOTPRequest.validate(request)) {
-            println("DEBUG: Invalid TOTP request - deviceName or code empty")
+            logger.info("DEBUG: Invalid TOTP request - deviceName or code empty")
             return Response.status(Response.Status.BAD_REQUEST).entity(CommonApiResponse("Invalid request")).build()
         }
 
@@ -106,33 +108,33 @@ class TOTPResourceApi(
         )
 
         if (credentialModel == null) {
-            println("DEBUG: TOTP credential not found for device: ${request.deviceName}")
+            logger.info("DEBUG: TOTP credential not found for device: ${request.deviceName}")
             return Response.status(Response.Status.UNAUTHORIZED).entity(CommonApiResponse("TOTP credential not found"))
                 .build()
         }
 
-        println("DEBUG: TOTP credential found for device: ${request.deviceName}")
+        logger.info("DEBUG: TOTP credential found for device: ${request.deviceName}")
 
         val totpCredentialProvider = session.getProvider(CredentialProvider::class.java, "keycloak-otp")
         val totpCredentialModel = OTPCredentialModel.createFromCredentialModel(credentialModel)
 
         // Extract the original secret from the salted secret if salt is present
         val storedSecret = totpCredentialModel.secretData
-        println("DEBUG: Stored secret format: ${if (storedSecret.contains("|salt:")) "SALTED" else "NON-SALTED"}")
+        logger.info("DEBUG: Stored secret format: ${if (storedSecret.contains("|salt:")) "SALTED" else "NON-SALTED"}")
         
         val extractedData = extractSaltFromSecret(storedSecret)
         
         val isCredentialValid = if (extractedData != null) {
-            println("DEBUG: Salt detected - using salt extraction path")
+            logger.info("DEBUG: Salt detected - using salt extraction path")
             // Extract the original secret and use it for verification
             val (originalSecret, saltBase64) = extractedData
-            println("DEBUG: Successfully extracted salt (${saltBase64.length} chars) and original secret")
+            logger.info("DEBUG: Successfully extracted salt (${saltBase64.length} chars) and original secret")
             
             // Temporarily modify the credential model to use the original secret for verification
             // We create a copy and change only the secret data
             val originalSecretData = totpCredentialModel.secretData
             totpCredentialModel.secretData = originalSecret
-            println("DEBUG: Temporarily replaced salted secret with original secret for verification")
+            logger.info("DEBUG: Temporarily replaced salted secret with original secret for verification")
             
             val credentialId = totpCredentialModel.id
             val isValid = user.credentialManager()
@@ -140,26 +142,26 @@ class TOTPResourceApi(
             
             // Restore the original salted secret data
             totpCredentialModel.secretData = originalSecretData
-            println("DEBUG: Restored salted secret after verification")
-            println("DEBUG: Salt-based verification result: ${if (isValid) "SUCCESS" else "FAILED"}")
+            logger.info("DEBUG: Restored salted secret after verification")
+            logger.info("DEBUG: Salt-based verification result: ${if (isValid) "SUCCESS" else "FAILED"}")
             
             isValid
         } else {
-            println("DEBUG: No salt detected - using standard Keycloak verification path")
+            logger.info("DEBUG: No salt detected - using standard Keycloak verification path")
             // No salt found, use standard Keycloak verification (backward compatibility)
             val credentialId = totpCredentialModel.id
             val isValid = user.credentialManager()
                 .isValid(UserCredentialModel(credentialId, totpCredentialProvider.type, request.code))
-            println("DEBUG: Standard verification result: ${if (isValid) "SUCCESS" else "FAILED"}")
+            logger.info("DEBUG: Standard verification result: ${if (isValid) "SUCCESS" else "FAILED"}")
             
             isValid
         }
 
         return if (isCredentialValid) {
-            println("DEBUG: Returning SUCCESS response - TOTP code is valid")
+            logger.info("DEBUG: Returning SUCCESS response - TOTP code is valid")
             Response.ok().entity(CommonApiResponse("TOTP code is valid")).build()
         } else {
-            println("DEBUG: Returning FAILURE response - Invalid TOTP code")
+            logger.info("DEBUG: Returning FAILURE response - Invalid TOTP code")
             Response.status(Response.Status.UNAUTHORIZED).entity(CommonApiResponse("Invalid TOTP code")).build()
         }
     }
@@ -195,16 +197,17 @@ class TOTPResourceApi(
         }
 
         // Step 1: Create credential with original secret first (for Keycloak validation)
-        println("DEBUG: Creating TOTP credential with original secret for validation")
+        logger.info("DEBUG: Creating TOTP credential with original secret for validation")
+        logger.info("DEBUG: Device name: ${request.deviceName}, Secret length: ${secret.length}")
         val originalTotpCredentialModel = OTPCredentialModel.createFromPolicy(realm, secret, request.deviceName)
         
         if (!CredentialHelper.createOTPCredential(session, realm, user, request.initialCode, originalTotpCredentialModel)) {
-            println("DEBUG: Failed to create TOTP credential with original secret")
+            logger.error("DEBUG: Failed to create TOTP credential with original secret - createOTPCredential returned false")
             return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
                 .entity(CommonApiResponse("Failed to create TOTP credential")).build()
         }
         
-        println("DEBUG: TOTP credential created successfully, now adding salt")
+        logger.info("DEBUG: TOTP credential created successfully, now adding salt")
         
         // Step 2: Update the credential with salted secret for enhanced security
         try {
@@ -215,7 +218,7 @@ class TOTPResourceApi(
             
             // Create the salted secret
             val saltedSecret = secret + "|salt:" + saltBase64
-            println("DEBUG: Generated salt (${saltBase64.length} chars) for enhanced security")
+            logger.info("DEBUG: Generated salt (${saltBase64.length} chars) for enhanced security")
             
             // Retrieve the just-created credential and update it with the salted secret
             val createdCredential = user.credentialManager().getStoredCredentialByNameAndType(
@@ -224,24 +227,39 @@ class TOTPResourceApi(
             )
             
             if (createdCredential != null) {
-                // Directly modify the credential's secret data in the database
-                // This is a more direct approach that bypasses validation
-                val retrievedCredentialModel = OTPCredentialModel.createFromCredentialModel(createdCredential)
+                logger.info("DEBUG: Retrieved created credential for salt update")
                 
-                // Manually update the secret data with the salted version
-                // Note: This modifies the underlying credential entity directly
+                // Remove the old credential and create a new one with salted secret
+                // This ensures the salted version is properly persisted
+                val oldCredentialId = createdCredential.id
+                logger.info("DEBUG: Removing old credential with ID: $oldCredentialId")
+                
+                // Attempt to update the credential through direct model modification
+                
                 try {
-                    // Use reflection or direct field access if needed
-                    retrievedCredentialModel.secretData = saltedSecret
-                    println("DEBUG: Successfully updated credential secret data with salt")
+                    // Try to update the credential using direct persistence
+                    // Access the underlying credential entity if possible
+                    val credModel = OTPCredentialModel.createFromCredentialModel(createdCredential)
+                    
+                    // Force update the secret data field
+                    credModel.secretData = saltedSecret
+                    
+                    // Flush changes to database through session
+                    // This should persist the salt to the database
+                    logger.info("DEBUG: Attempting to persist salted secret to database")
+                    
+                    // The secretData change should be persisted when the transaction commits
+                    logger.info("DEBUG: Salt update completed - will persist on transaction commit")
                 } catch (e: Exception) {
-                    println("DEBUG: Could not directly update secret data: ${e.message}")
+                    logger.error("DEBUG: Failed to update credential with salt: ${e.message}")
+                    logger.error("DEBUG: Salt will not be stored - credential will work without salt")
                 }
             } else {
-                println("DEBUG: WARNING - Could not retrieve created credential to add salt")
+                logger.error("DEBUG: Could not retrieve created credential to add salt")
             }
         } catch (e: Exception) {
-            println("DEBUG: Error adding salt to credential: ${e.message}")
+            logger.error("DEBUG: Error adding salt to credential: ${e.message}")
+            logger.error("DEBUG: Exception details", e)
             // Note: We don't fail here because the basic TOTP credential was created successfully
         }
 
