@@ -18,11 +18,28 @@ import org.keycloak.services.managers.AppAuthManager
 import org.keycloak.utils.CredentialHelper
 import org.keycloak.utils.TotpUtils
 import java.security.SecureRandom
+import java.util.Base64
 
 class TOTPResourceApi(
     private val session: KeycloakSession,
 ) {
     private val totpSecretLength = 20
+
+    /**
+     * Helper function to extract salt from a salted secret
+     * Returns Pair<originalSecret, saltBase64> or null if no salt found
+     */
+    private fun extractSaltFromSecret(saltedSecret: String): Pair<String, String>? {
+        val saltPrefix = "|salt:"
+        val saltIndex = saltedSecret.indexOf(saltPrefix)
+        return if (saltIndex != -1) {
+            val originalSecret = saltedSecret.substring(0, saltIndex)
+            val saltBase64 = saltedSecret.substring(saltIndex + saltPrefix.length)
+            Pair(originalSecret, saltBase64)
+        } else {
+            null
+        }
+    }
 
     private fun authenticateSessionAndGetUser(
         userId: String
@@ -132,10 +149,20 @@ class TOTPResourceApi(
         }
 
         val totpCredentialModel = OTPCredentialModel.createFromPolicy(realm, secret, request.deviceName)
+        
+        // Generate salt for additional security (Option 1: Store salt in secret data)
         val salt = ByteArray(16)
         SecureRandom().nextBytes(salt)
-        totpCredentialModel.salt = salt
-        if (!CredentialHelper.createOTPCredential(session, realm, user, request.initialCode, totpCredentialModel)) {
+        val saltBase64 = Base64.getEncoder().encodeToString(salt)
+        
+        // Create a salted secret by combining the original secret with salt
+        // This approach stores salt information within the secret data itself
+        val saltedSecret = secret + "|salt:" + saltBase64
+        
+        // Create a new credential model with the salted secret
+        val saltedTotpCredentialModel = OTPCredentialModel.createFromPolicy(realm, saltedSecret, request.deviceName)
+        
+        if (!CredentialHelper.createOTPCredential(session, realm, user, request.initialCode, saltedTotpCredentialModel)) {
             return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
                 .entity(CommonApiResponse("Failed to create TOTP credential")).build()
         }

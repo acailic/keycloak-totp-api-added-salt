@@ -13,10 +13,10 @@ repositories {
 }
 
 dependencies {
-    implementation("org.keycloak:keycloak-services:26.0.0")
-    implementation("org.keycloak:keycloak-server-spi:26.0.0")
-    implementation("org.keycloak:keycloak-server-spi-private:26.0.0")
-    implementation("jakarta.ws.rs:jakarta.ws.rs-api:3.1.0")
+    compileOnly("org.keycloak:keycloak-services:26.0.0")
+    compileOnly("org.keycloak:keycloak-server-spi:26.0.0")
+    compileOnly("org.keycloak:keycloak-server-spi-private:26.0.0")
+    compileOnly("jakarta.ws.rs:jakarta.ws.rs-api:3.1.0")
     implementation("org.jetbrains.kotlin:kotlin-stdlib:2.0.0")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.14.2")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.14.2")
@@ -38,5 +38,15 @@ tasks {
         mergeServiceFiles()
         dependsOn(build)
         archiveFileName.set("keycloak-totp-api.jar")
+        
+        // Exclude server-provided libraries to avoid classloader conflicts
+        exclude("org/keycloak/**")
+        exclude("jakarta/ws/rs/**")
+        
+        // Exclude Keycloak and JAX-RS dependencies from being bundled
+        dependencies {
+            exclude(dependency("org.keycloak:.*"))
+            exclude(dependency("jakarta.ws.rs:.*"))
+        }
     }
 }
