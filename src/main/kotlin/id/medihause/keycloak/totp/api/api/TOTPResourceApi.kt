@@ -30,13 +30,16 @@ class TOTPResourceApi(
      * Returns Pair<originalSecret, saltBase64> or null if no salt found
      */
     private fun extractSaltFromSecret(saltedSecret: String): Pair<String, String>? {
+        println("DEBUG: Attempting to extract salt from secret (length: ${saltedSecret.length})")
         val saltPrefix = "|salt:"
         val saltIndex = saltedSecret.indexOf(saltPrefix)
         return if (saltIndex != -1) {
             val originalSecret = saltedSecret.substring(0, saltIndex)
             val saltBase64 = saltedSecret.substring(saltIndex + saltPrefix.length)
+            println("DEBUG: Salt extraction successful - original secret length: ${originalSecret.length}, salt length: ${saltBase64.length}")
             Pair(originalSecret, saltBase64)
         } else {
+            println("DEBUG: No salt prefix found in secret - treating as non-salted credential")
             null
         }
     }
@@ -89,9 +92,11 @@ class TOTPResourceApi(
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
     fun verifyTOTP(request: VerifyTOTPRequest, @PathParam("userId") userId: String): Response {
+        println("DEBUG: TOTP verification started for user $userId, device: ${request.deviceName}")
         val user = authenticateSessionAndGetUser(userId)
 
         if (!VerifyTOTPRequest.validate(request)) {
+            println("DEBUG: Invalid TOTP request - deviceName or code empty")
             return Response.status(Response.Status.BAD_REQUEST).entity(CommonApiResponse("Invalid request")).build()
         }
 
@@ -101,25 +106,33 @@ class TOTPResourceApi(
         )
 
         if (credentialModel == null) {
+            println("DEBUG: TOTP credential not found for device: ${request.deviceName}")
             return Response.status(Response.Status.UNAUTHORIZED).entity(CommonApiResponse("TOTP credential not found"))
                 .build()
         }
+
+        println("DEBUG: TOTP credential found for device: ${request.deviceName}")
 
         val totpCredentialProvider = session.getProvider(CredentialProvider::class.java, "keycloak-otp")
         val totpCredentialModel = OTPCredentialModel.createFromCredentialModel(credentialModel)
 
         // Extract the original secret from the salted secret if salt is present
         val storedSecret = totpCredentialModel.secretData
+        println("DEBUG: Stored secret format: ${if (storedSecret.contains("|salt:")) "SALTED" else "NON-SALTED"}")
+        
         val extractedData = extractSaltFromSecret(storedSecret)
         
         val isCredentialValid = if (extractedData != null) {
+            println("DEBUG: Salt detected - using salt extraction path")
             // Extract the original secret and use it for verification
-            val (originalSecret, _) = extractedData
+            val (originalSecret, saltBase64) = extractedData
+            println("DEBUG: Successfully extracted salt (${saltBase64.length} chars) and original secret")
             
             // Temporarily modify the credential model to use the original secret for verification
             // We create a copy and change only the secret data
             val originalSecretData = totpCredentialModel.secretData
             totpCredentialModel.secretData = originalSecret
+            println("DEBUG: Temporarily replaced salted secret with original secret for verification")
             
             val credentialId = totpCredentialModel.id
             val isValid = user.credentialManager()
@@ -127,18 +140,26 @@ class TOTPResourceApi(
             
             // Restore the original salted secret data
             totpCredentialModel.secretData = originalSecretData
+            println("DEBUG: Restored salted secret after verification")
+            println("DEBUG: Salt-based verification result: ${if (isValid) "SUCCESS" else "FAILED"}")
             
             isValid
         } else {
+            println("DEBUG: No salt detected - using standard Keycloak verification path")
             // No salt found, use standard Keycloak verification (backward compatibility)
             val credentialId = totpCredentialModel.id
-            user.credentialManager()
+            val isValid = user.credentialManager()
                 .isValid(UserCredentialModel(credentialId, totpCredentialProvider.type, request.code))
+            println("DEBUG: Standard verification result: ${if (isValid) "SUCCESS" else "FAILED"}")
+            
+            isValid
         }
 
         return if (isCredentialValid) {
+            println("DEBUG: Returning SUCCESS response - TOTP code is valid")
             Response.ok().entity(CommonApiResponse("TOTP code is valid")).build()
         } else {
+            println("DEBUG: Returning FAILURE response - Invalid TOTP code")
             Response.status(Response.Status.UNAUTHORIZED).entity(CommonApiResponse("Invalid TOTP code")).build()
         }
     }
