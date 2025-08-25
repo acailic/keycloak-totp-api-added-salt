@@ -107,10 +107,34 @@ class TOTPResourceApi(
 
         val totpCredentialProvider = session.getProvider(CredentialProvider::class.java, "keycloak-otp")
         val totpCredentialModel = OTPCredentialModel.createFromCredentialModel(credentialModel)
-        val credentialId = totpCredentialModel.id
 
-        val isCredentialValid = user.credentialManager()
-            .isValid(UserCredentialModel(credentialId, totpCredentialProvider.type, request.code))
+        // Extract the original secret from the salted secret if salt is present
+        val storedSecret = totpCredentialModel.secretData
+        val extractedData = extractSaltFromSecret(storedSecret)
+        
+        val isCredentialValid = if (extractedData != null) {
+            // Extract the original secret and use it for verification
+            val (originalSecret, _) = extractedData
+            
+            // Temporarily modify the credential model to use the original secret for verification
+            // We create a copy and change only the secret data
+            val originalSecretData = totpCredentialModel.secretData
+            totpCredentialModel.secretData = originalSecret
+            
+            val credentialId = totpCredentialModel.id
+            val isValid = user.credentialManager()
+                .isValid(UserCredentialModel(credentialId, totpCredentialProvider.type, request.code))
+            
+            // Restore the original salted secret data
+            totpCredentialModel.secretData = originalSecretData
+            
+            isValid
+        } else {
+            // No salt found, use standard Keycloak verification (backward compatibility)
+            val credentialId = totpCredentialModel.id
+            user.credentialManager()
+                .isValid(UserCredentialModel(credentialId, totpCredentialProvider.type, request.code))
+        }
 
         return if (isCredentialValid) {
             Response.ok().entity(CommonApiResponse("TOTP code is valid")).build()
@@ -131,9 +155,10 @@ class TOTPResourceApi(
         }
 
         val encodedTOTP = request.encodedSecret
-        val secret = String(Base32.decode(encodedTOTP))
+        val secretBytes = Base32.decode(encodedTOTP)
+        val secret = String(secretBytes)
 
-        if (secret.length != totpSecretLength) {
+        if (secretBytes.size != totpSecretLength) {
             return Response.status(Response.Status.BAD_REQUEST).entity(CommonApiResponse("Invalid secret")).build()
         }
 
@@ -148,8 +173,6 @@ class TOTPResourceApi(
                 .build()
         }
 
-        val totpCredentialModel = OTPCredentialModel.createFromPolicy(realm, secret, request.deviceName)
-        
         // Generate salt for additional security (Option 1: Store salt in secret data)
         val salt = ByteArray(16)
         SecureRandom().nextBytes(salt)
